@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 若页面和接口不在同一个路径下，改这里填接口前缀，例如 "/api" 或 "https://ip.example.com" -->
+<meta name="api-base" content="">
+<title>IP 归属地查询</title>
+<style>
+  :root{
+    --bg:#0f1117; --card:#171a23; --line:#252936; --fg:#e8eaf0;
+    --muted:#8b93a7; --accent:#4f8cff; --ok:#3fb950; --err:#f85149;
+  }
+  @media (prefers-color-scheme: light){
+    :root{--bg:#f5f6fa;--card:#fff;--line:#e3e6ee;--fg:#1a1d26;--muted:#6b7280;}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+  .wrap{width:100%;max-width:680px}
+  h1{font-size:22px;font-weight:600;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
+  .row{display:flex;gap:10px}
+  input{flex:1;padding:11px 14px;border-radius:8px;border:1px solid var(--line);
+    background:transparent;color:var(--fg);font-size:15px;outline:none;font-family:ui-monospace,Menlo,monospace}
+  input:focus{border-color:var(--accent)}
+  button{padding:11px 20px;border-radius:8px;border:none;background:var(--accent);
+    color:#fff;font-size:15px;font-weight:500;cursor:pointer;white-space:nowrap}
+  button:hover{opacity:.9}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .result{margin-top:18px;display:none}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  td{padding:9px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  td:first-child{color:var(--muted);width:92px}
+  td:last-child{font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+  .msg{margin-top:14px;padding:11px 14px;border-radius:8px;font-size:14px;display:none}
+  .msg.err{background:rgba(248,81,73,.12);color:var(--err);display:block}
+  .msg.ok{background:rgba(63,185,80,.12);color:var(--ok);display:block}
+  .hint{margin-top:16px;font-size:12px;color:var(--muted);line-height:1.8}
+  code{background:rgba(127,127,127,.15);padding:2px 5px;border-radius:4px;
+    font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .quick{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+  .quick span{font-size:12px;color:var(--muted);cursor:pointer;border:1px solid var(--line);
+    padding:3px 10px;border-radius:20px}
+  .quick span:hover{border-color:var(--accent);color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>IP 归属地查询</h1>
+  <div class="sub">离线数据库 · 支持 IPv4 / IPv6 · 查询不落库</div>
+
+  <div class="card">
+    <div class="row">
+      <input id="ip" placeholder="输入 IP，例如 114.114.114.114" autocomplete="off">
+      <button id="btn">查询</button>
+    </div>
+    <div class="quick">
+      <span data-ip="114.114.114.114">114.114.114.114</span>
+      <span data-ip="223.5.5.5">223.5.5.5</span>
+      <span data-ip="8.8.8.8">8.8.8.8</span>
+      <span data-ip="240e:4c:4008::1">240e:4c:4008::1</span>
+    </div>
+
+    <div class="msg" id="msg"></div>
+
+    <div class="result" id="result">
+      <table>
+        <tr><td>IP</td><td id="r-ip"></td></tr>
+        <tr><td>国家</td><td id="r-country"></td></tr>
+        <tr><td>省份</td><td id="r-province"></td></tr>
+        <tr><td>城市</td><td id="r-city"></td></tr>
+        <tr><td>运营商</td><td id="r-isp"></td></tr>
+      </table>
+    </div>
+
+    <div class="hint">
+      API 调用：<code>GET /ip?ip=8.8.8.8</code><br>
+      也可直接访问 <a href="#" id="me">/me</a> 查看你自己的公网 IP
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// 接口前缀：默认同源根路径（''），页面放在子目录或接口在别处时改 <meta name="api-base">
+const API = (document.querySelector('meta[name="api-base"]') || {}).content || '';
+$('me').href = API + '/me';
+
+function show(cls, text){
+  const m = $('msg');
+  m.className = 'msg ' + cls;
+  m.textContent = text;
+}
+
+async function readJSON(r){
+  const ct = (r.headers.get('content-type') || '');
+  if (ct.indexOf('json') < 0) {
+    // 被反向代理/主机商的 error_page 换成了 HTML 页，拿不到结构化错误
+    return { __notjson: true, status: r.status };
+  }
+  try { return await r.json(); } catch (e) { return { __notjson: true, status: r.status }; }
+}
+
+async function query(){
+  const ip = $('ip').value.trim();
+  if (!ip) { show('err', '请输入 IP 地址'); return; }
+  $('btn').disabled = true;
+  $('result').style.display = 'none';
+  $('msg').className = 'msg';
+  try {
+    const r = await fetch(`${API}/ip?ip=${encodeURIComponent(ip)}`);
+    const d = await readJSON(r);
+    if (d.__notjson) {
+      show('err', `请求失败（HTTP ${d.status}），返回的不是 JSON —— 检查反向代理是否把错误页替换成了 HTML`);
+      return;
+    }
+    if (!r.ok) { show('err', d.msg || `查询失败（HTTP ${r.status}）`); return; }
+    $('r-ip').textContent = d.ip;
+    $('r-country').textContent = d.country || '—';
+    $('r-province').textContent = d.province || '—';
+    $('r-city').textContent = d.city || '—';
+    $('r-isp').textContent = d.isp || '—';
+    $('result').style.display = 'block';
+  } catch (e) {
+    show('err', '请求失败，请检查服务是否正常运行');
+  } finally {
+    $('btn').disabled = false;
+  }
+}
+
+$('btn').onclick = query;
+$('ip').addEventListener('keydown', e => { if (e.key === 'Enter') query(); });
+document.querySelectorAll('.quick span').forEach(el => {
+  el.onclick = () => { $('ip').value = el.dataset.ip; query(); };
+});
+
+// 自动识别：把「你的公网 IP」提示填进输入框的 placeholder
+(async () => {
+  try {
+    const r = await fetch(`${API}/me`);
+    const d = await readJSON(r);
+    if (d && d.ip && /^[0-9a-fA-F:.]+$/.test(d.ip) && d.ip !== '127.0.0.1') {
+      $('ip').placeholder = `你的公网 IP 是 ${d.ip}，点查询`;
+    }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>

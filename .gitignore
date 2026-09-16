@@ -1,0 +1,19 @@
+# 数据库文件（授权原因不入仓库，用 scripts/update_db.sh 获取）
+data/*.db
+data/*.db.new
+
+# 运行时产物
+*.pid
+*.log
+__pycache__/
+*.py[cod]
+
+# 备份文件
+*.bak
+*.bak.*
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

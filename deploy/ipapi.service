@@ -1,0 +1,37 @@
+[Unit]
+Description=IP Location API Service (ip2region offline)
+Documentation=file://__BASE_DIR__/README.md
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=__BASE_DIR__
+ExecStart=__PYTHON__ __BASE_DIR__/app/server.py --host 127.0.0.1 --port __PORT__
+Restart=always
+RestartSec=3
+
+# 服务只读数据库，不需要 root。用 www / nobody 等低权限用户更安全。
+# （该用户读不到项目目录时 systemd 会启动失败，journalctl 里能看到 Permission denied，
+#   这种情况下把本行改成 User=root 即可。）
+User=__RUN_USER__
+
+# ===== 环境变量（由 scripts/deploy.sh 自动填入，不要手写占位符）=====
+# API Key，留空表示不校验。对外提供服务时建议设置
+Environment="IPAPI_KEY=__IPAPI_KEY__"
+# 每 IP 每分钟请求上限，0 表示关闭
+Environment="IPAPI_RATE_LIMIT=__RATE_LIMIT__"
+# 是否信任 X-Real-IP / X-Forwarded-For，在 Nginx 后面保持 1
+Environment="IPAPI_TRUST_PROXY=1"
+
+# ===== 内存与资源限制（针对 512M 小机器）=====
+MemoryMax=200M
+MemoryHigh=160M
+CPUQuota=80%
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ipapi
+
+[Install]
+WantedBy=multi-user.target

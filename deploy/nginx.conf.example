@@ -1,0 +1,102 @@
+# ============================================================
+#  IP 归属地查询 API —— Nginx 反向代理配置示例
+# ============================================================
+#
+# 宝塔面板用法：
+#   1. 新建站点（纯静态类型即可），域名如 ipapi.example.com
+#   2. 站点设置 → 反向代理 → 添加：目标 URL 填 http://127.0.0.1:8080
+#   3. 再把生成的那个 location 段替换成下面这版（面板里可编辑站点配置文件）
+#
+# 通用 Nginx 用法：把下面内容放进对应 server { } 块里。
+#
+# ------------------------------------------------------------
+# ⚠️ 最重要的一点：让上游拿到「真实访客 IP」
+# ------------------------------------------------------------
+# 本服务的限流是按请求方 IP 计数的，所以「上游看到的 IP 是不是真的」直接
+# 决定了限流有没有意义。有两个坑，都会让客户端自己决定自己是谁：
+#
+# 坑 1：`X-Forwarded-For` 用了追加语义（$proxy_add_x_forwarded_for）——
+#       客户端自己发的 XFF 会排在最前面。若服务取第一段就被伪造。
+#       （本服务已经改成优先读 X-Real-IP、XFF 取最后一段，属于纵深防御）
+#
+# 坑 2（更隐蔽）：链路上有 ngx_http_realip_module 的配置
+#         set_real_ip_from 0.0.0.0/0;
+#         real_ip_header X-Forwarded-For;
+#       这会把 $remote_addr 本身改写成客户端自报的值！
+#       于是无论你怎么写 proxy_set_header，送过去的都是假的，
+#       访问日志也全是假的。
+#       ⚠️ 只在真正有 CDN 在你前面时才启用 realip，而且必须把
+#          set_real_ip_from 收窄成 CDN 的官方出口网段。
+#
+# 自查方法（两个头给【不同】的值，看哪个生效）：
+#   curl -H "X-Real-IP: 1.1.1.1" -H "X-Forwarded-For: 2.2.2.2" https://你的域名/me
+#   期望返回真实来源地址；若返回 2.2.2.2 → 大概率中了坑 2。
+#
+# ------------------------------------------------------------
+# 上游连接复用（可选但推荐）
+# ------------------------------------------------------------
+# 放 server { } 之前。开启后 nginx 会复用与上游的 TCP 连接，
+# 高并发下能显著减少连接建立开销。
+# 🔑 三条必须同时满足才生效：upstream 里的 keepalive、
+#    proxy_http_version 1.1、proxy_set_header Connection ""。
+#
+# upstream ipapi_backend {
+#     server 127.0.0.1:8080;
+#     keepalive 16;
+# }
+
+server {
+    listen 80;
+    server_name ipapi.example.com;
+
+    # 整站反代：所有路径（含 /ip /me /batch /health）都交给服务处理。
+    # ⚠️ 建议用整站反代，不要把项目目录当静态目录暴露——
+    #    否则 app/、data/、scripts/ 下的源码和 11MB 数据库会被直接下载。
+    location / {
+        # 用 upstream 别名则写 http://ipapi_backend
+        proxy_pass http://127.0.0.1:8080;
+
+        proxy_http_version 1.1;
+
+        # 真实 IP 的传递：用 $remote_addr【覆盖】，而不是追加
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 配合 upstream keepalive 使用
+        proxy_set_header Connection        "";
+
+        # 纯内存查询，不需要缓冲和缓存
+        proxy_buffering off;
+        proxy_cache     off;
+
+        # 别让上层的 error_page 404 把接口的 404 换成一页 HTML
+        # （很多面板/主机商会默认配 error_page 404 /404.html）
+        proxy_intercept_errors off;
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout    10s;
+    }
+
+    # ---- 可选：Nginx 层再限一道速（放在 location 外或内均可）----
+    # 先在 http { } 块里定义：
+    #   limit_req_zone $binary_remote_addr zone=ipapi:10m rate=5r/s;
+    # 然后在 location / 里加：
+    #   limit_req zone=ipapi burst=10 nodelay;
+    #   limit_req_status 429;
+}
+
+# ------------------------------------------------------------
+# 如果前面真的挂了 CDN（以 Cloudflare 为例）
+# ------------------------------------------------------------
+# 那时才需要 realip，并且只信任 CF 的官方网段（以官方公告为准）：
+#
+# set_real_ip_from 173.245.48.0/20;
+# set_real_ip_from 103.21.244.0/22;
+# set_real_ip_from 2400:cb00::/32;
+# # …（CF 完整的 IPv4 / IPv6 列表都要加上）
+# real_ip_header CF-Connecting-IP;
+#
+# 注意橙云场景要用 CF-Connecting-IP，而不是 X-Forwarded-For。
+# ❌ 绝对不要写 set_real_ip_from 0.0.0.0/0; —— 那等于把 IP 交给客户端自报。
