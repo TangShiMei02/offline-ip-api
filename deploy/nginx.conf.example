@@ -88,6 +88,44 @@ server {
 }
 
 # ------------------------------------------------------------
+# 可选：把自带的网页查询页挂在 / 上
+# ------------------------------------------------------------
+# 项目自带 deploy/index.html —— 单文件查询界面，无依赖、无构建。
+# 想让它显示在 https://你的域名/ ，同时 /ip /me 仍然走反代，需要两步：
+#
+#   ① 把页面放到站点根目录并改名为 index.html：
+#        cp deploy/index.html ./index.html
+#
+#   ② 在 server { } 里（location / 之前）加上这两段：
+#
+#   location = / {
+#       root /opt/ipapi;                 # ← 换成你的项目绝对路径
+#       try_files /index.html =404;      # ← 必须用 try_files，不能用 index
+#   }
+#   location = /index.html {
+#       root /opt/ipapi;
+#       try_files /index.html =404;
+#   }
+#
+#   `location = /` 是精确匹配、优先级最高，所以能抢在 `location ^~ /` 之前命中；
+#   其他路径不匹配 `= /`，照旧走反代。
+#
+# ⚠️ 为什么绝对不能用 `index index.html;`：
+#   `index` 会让 nginx 做一次【内部重定向到 /index.html】，而内部重定向会
+#   【重新走一遍 location 匹配】—— 于是 /index.html 被上面的 `location ^~ /`（反代）
+#   抢走、送进本服务，首页就变成了本服务的 404 JSON（{"code":404,"msg":"not found"}）。
+#   而 try_files 命中文件时是在【当前上下文】直接处理，不重新匹配 location。
+#   `location = /index.html` 那段是兜底，防止别的东西又内部重定向回来。
+#
+# 挂上之后的路径分布：
+#   /                → 查询页
+#   /help            → 接口清单 JSON（本来 / 返回的就是这个）
+#   /ip /me /batch   → 接口
+#   /health          → 健康检查
+#
+# 想撤销：把这两段 location 删掉，再把站点根目录的 index.html 删掉，reload 即可。
+
+# ------------------------------------------------------------
 # 如果前面真的挂了 CDN（以 Cloudflare 为例）
 # ------------------------------------------------------------
 # 那时才需要 realip，并且只信任 CF 的官方网段（以官方公告为准）：

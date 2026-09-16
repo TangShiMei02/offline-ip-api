@@ -59,6 +59,10 @@
 ### 文档
 
 - README 重写：数据文件获取方式、反代配置、真实 IP 注意事项、实测性能数据。
+- README 与 `deploy/nginx.conf.example` 补充「**把自带查询页挂在 `/`**」的完整做法，
+  并说明为什么只能用 `try_files` 而不能用 `index index.html;`
+  （`index` 的内部重定向会重新匹配 location，被整站反代的 `location ^~ /` 抢走，
+  首页会变成服务自己的 404 JSON）。
 - **数据库文件不再随仓库分发**（授权原因），改用 `scripts/update_db.sh` 获取。
 - 新增 `LICENSE`（MIT）、`.gitignore`、`data/README.md`。
 

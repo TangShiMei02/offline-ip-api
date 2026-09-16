@@ -29,7 +29,7 @@ ipapi/
 ├── deploy/
 │   ├── ipapi.service       # systemd 单元模板
 │   ├── nginx.conf.example  # Nginx 反向代理配置示例
-│   └── index.html          # 可选：网页查询界面
+│   └── index.html          # 可选：网页查询界面（挂法见 deploy/nginx.conf.example）
 ├── Dockerfile
 ├── README.md
 └── USAGE.md                # 调用示例（JS / Python / PHP / 命令行）
@@ -165,6 +165,39 @@ location / {
 > curl -H "X-Real-IP: 1.1.1.1" -H "X-Forwarded-For: 2.2.2.2" https://你的域名/me
 > ```
 > 期望返回**真实来源地址**。若返回 `2.2.2.2`，说明中了坑 2。
+
+### 可选：把自带的网页查询页挂在 `/`
+
+项目自带 `deploy/index.html`（单文件查询界面，无依赖无构建）。想让它显示在
+`https://你的域名/`，同时 `/ip` `/me` 仍然走反代：
+
+```bash
+cp deploy/index.html ./index.html      # 放到站点根目录并改名为 index.html
+```
+
+```nginx
+# 在 server { } 里、location / 之前加上：
+location = / {
+    root /opt/ipapi;                 # 换成你的项目绝对路径
+    try_files /index.html =404;      # ⚠️ 必须用 try_files，不能用 index
+}
+location = /index.html {
+    root /opt/ipapi;
+    try_files /index.html =404;
+}
+```
+
+> **⚠️ 这里有个坑，别用 `index index.html;`**
+>
+> `index` 会让 nginx 做一次**内部重定向到 `/index.html`**，而内部重定向会
+> **重新走一遍 location 匹配** —— 于是 `/index.html` 被反代的 `location ^~ /` 抢走、
+> 送进本服务，首页就变成了本服务的 404 JSON（`{"code":404,"msg":"not found"}`）。
+>
+> `try_files` 命中文件时是在**当前上下文**直接处理，不重新匹配 location，所以是对的。
+> `location = /index.html` 那段是兜底，防止别的东西又内部重定向回来。
+>
+> 挂上之后：`/` 是查询页，`/help` 是接口清单 JSON（本来 `/` 返回的就是这个），
+> `/ip` `/me` `/batch` `/health` 照旧。
 
 ---
 
