@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 ipapi contributors
+Copyright (c) 2026 TangShiMei
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -24,5 +24,11 @@ SOFTWARE.
 
 注意：本许可仅覆盖本项目的**代码**。
 
-`data/` 下的 IP 数据库文件来自第三方，**不随本仓库分发**，其授权条款与本许可无关，
-请见 README「数据来源与许可」一节。
+两处例外：
+
+1. `app/ip2region/` 下的三个文件是
+   [ip2region](https://github.com/lionsoul2014/ip2region) 官方随仓库发布的 Python 绑定，
+   沿用其 **Apache-2.0** 许可（文件内保留了原始版权头），不适用本 MIT 许可。
+   来源与改动见 `app/ip2region/SOURCE.md`。
+2. `data/` 下的数据文件来自第三方，**不随本仓库分发**，其授权条款与本许可无关，
+   且以数据提供方说明为准。见 README「数据来源与许可」一节。

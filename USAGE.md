@@ -3,7 +3,7 @@
 服务地址（本文示例统一用这个，换成你自己的域名即可）：
 
 ```
-https://ip.guancii.cc.cd
+https://ip.rir.ccwu.cc
 ```
 
 ---
@@ -13,9 +13,9 @@ https://ip.guancii.cc.cd
 不用装任何工具，地址栏直接打开：
 
 ```
-https://ip.guancii.cc.cd/ip?ip=223.5.5.5
-https://ip.guancii.cc.cd/me
-https://ip.guancii.cc.cd/health
+https://ip.rir.ccwu.cc/ip?ip=223.5.5.5
+https://ip.rir.ccwu.cc/me
+https://ip.rir.ccwu.cc/health
 ```
 
 ---
@@ -49,8 +49,9 @@ $geo = ip_lookup($visitorIp);                   // 再调 /ip?ip=<访客IP>
   "region": "",
   "province": "浙江省",
   "city": "杭州市",
-  "isp": "阿里云",
-  "raw": "中国|0|浙江省|杭州市|阿里云",
+  "isp": "阿里",
+  "iso": "CN",
+  "raw": "中国|浙江省|杭州市|阿里|CN",
   "ip": "223.5.5.5",
   "version": 4
 }
@@ -59,10 +60,14 @@ $geo = ip_lookup($visitorIp);                   // 再调 /ip?ip=<访客IP>
 | 字段 | 说明 |
 |---|---|
 | `country` / `province` / `city` / `isp` | 归属地信息，取不到时是空字符串 |
-| `region` | 多数数据库都为空，可以直接忽略 |
+| `iso` | ISO 3166-1 alpha-2 国码（`CN` / `JP` / `US`…），做国旗 / 分区路由直接用这个最省事 |
+| `region` | 1.3.0 起数据格式里没有这个字段，**恒为空字符串**，可以直接忽略 |
 | `version` | `4` 或 `6` |
-| `raw` | 数据库原始串，调试用 |
+| `raw` | 数据文件里的原始串，调试用 |
 | `ip` | 回显你查的那个 IP |
+
+> 国内数据是中文、海外数据是英文（`中国` / `Japan`），这是上游数据的约定。
+> 要按国家做判断，**建议用 `iso`** 而不是比较 `country` 字符串。
 
 ### 状态码
 
@@ -81,7 +86,7 @@ $geo = ip_lookup($visitorIp);                   // 再调 /ip?ip=<访客IP>
 接口已开 CORS（`Access-Control-Allow-Origin: *`），任何域名都能直接调，不需要后端中转。
 
 ```js
-const IPAPI = 'https://ip.guancii.cc.cd';
+const IPAPI = 'https://ip.rir.ccwu.cc';
 
 /**
  * 查 IP 归属地。不传 ip 则查「当前访客自己」。
@@ -133,7 +138,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-IPAPI = "https://ip.guancii.cc.cd"
+IPAPI = "https://ip.rir.ccwu.cc"
 
 
 def lookup_ip(ip=None, timeout=5):
@@ -153,7 +158,7 @@ def lookup_ip(ip=None, timeout=5):
 
 if __name__ == "__main__":
     d = lookup_ip("8.8.8.8")
-    print(d["country"], d["isp"])        # 美国 Level3
+    print(d["country"], d["isp"], d["iso"])      # 美国 Google LLC US
 
     print(lookup_ip("223.5.5.5")["city"])        # 杭州市
     print(lookup_ip("999.1.1.1"))                # None
@@ -169,7 +174,7 @@ if __name__ == "__main__":
 ```python
 import requests
 
-r = requests.get("https://ip.guancii.cc.cd/ip", params={"ip": "1.1.1.1"}, timeout=5)
+r = requests.get("https://ip.rir.ccwu.cc/ip", params={"ip": "1.1.1.1"}, timeout=5)
 geo = r.json() if r.status_code == 200 else None
 ```
 
@@ -184,7 +189,7 @@ geo = r.json() if r.status_code == 200 else None
  */
 function ip_lookup(string $ip, int $timeout = 5): ?array
 {
-    $url = 'https://ip.guancii.cc.cd/ip?ip=' . rawurlencode($ip);
+    $url = 'https://ip.rir.ccwu.cc/ip?ip=' . rawurlencode($ip);
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
@@ -223,7 +228,7 @@ echo $geo
 
 ```php
 $geo = @json_decode(@file_get_contents(
-    'https://ip.guancii.cc.cd/ip?ip=' . rawurlencode($ip),
+    'https://ip.rir.ccwu.cc/ip?ip=' . rawurlencode($ip),
     false,
     stream_context_create(['http' => ['timeout' => 5]])
 ), true);
@@ -235,19 +240,19 @@ $geo = @json_decode(@file_get_contents(
 
 ```bash
 # 单查
-curl -s 'https://ip.guancii.cc.cd/ip?ip=8.8.8.8'
+curl -s 'https://ip.rir.ccwu.cc/ip?ip=8.8.8.8'
 
 # 好看一点
-curl -s 'https://ip.guancii.cc.cd/ip?ip=8.8.8.8' | python3 -m json.tool
+curl -s 'https://ip.rir.ccwu.cc/ip?ip=8.8.8.8' | python3 -m json.tool
 
 # 只要城市
-curl -s 'https://ip.guancii.cc.cd/ip?ip=223.5.5.5' | python3 -c 'import json,sys;print(json.load(sys.stdin)["city"])'
+curl -s 'https://ip.rir.ccwu.cc/ip?ip=223.5.5.5' | python3 -c 'import json,sys;print(json.load(sys.stdin)["city"])'
 
 # 批量
-curl -s 'https://ip.guancii.cc.cd/batch?ips=8.8.8.8,1.1.1.1,114.114.114.114'
+curl -s 'https://ip.rir.ccwu.cc/batch?ips=8.8.8.8,1.1.1.1,114.114.114.114'
 
 # 只看状态码（探测是否可用）
-curl -s -o /dev/null -w '%{http_code}\n' 'https://ip.guancii.cc.cd/health'
+curl -s -o /dev/null -w '%{http_code}\n' 'https://ip.rir.ccwu.cc/health'
 ```
 
 ---
@@ -270,9 +275,11 @@ PHP 用 `CURLOPT_TIMEOUT`。**不设超时会把你的页面一起拖死。**
 **④ `/me` 是「谁调返回谁」**
 浏览器调 = 访客；服务器调 = 服务器。见第 1 节。
 
-**⑤ 数据库精度是城市级**
-结果为运营商登记的归属地，**不能作为精确定位依据**。
-IPv6 部分省份/城市可能只到市级（区县信息会丢），个别库外地址只有 `isp` 字段有值。
+**⑤ 数据精度是城市级，且「注册地」未必等于「实际所在地」**
+结果为 IP 段登记的归属地，**不能作为精确定位依据**。
+机房 / 代理 / VPN 的地址尤其容易「看起来不对」——某云厂在日本买的段，
+注册信息可能仍写着美国。判断国家建议用 `iso` 字段。
+数据的新旧可以用 `GET /health` 里的 `data.*.built_at` 确认。
 
 ---
 
@@ -282,7 +289,7 @@ IPv6 部分省份/城市可能只到市级（区县信息会丢），个别库�
 <span id="where">定位中…</span>
 
 <script>
-fetch('https://ip.guancii.cc.cd/me')
+fetch('https://ip.rir.ccwu.cc/me')
   .then(r => r.ok ? r.json() : null)
   .then(d => {
     const el = document.getElementById('where');

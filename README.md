@@ -1,13 +1,14 @@
 # ipapi — 离线 IP 归属地查询 API
 
-一个**零第三方依赖**的离线 IP 归属地查询服务。纯 Python 标准库实现，数据库全量常驻内存，
+一个**零第三方依赖**的离线 IP 归属地查询服务。纯 Python 标准库实现，
 适合跑在 1 核 512MB 的小机器上。
 
 - 支持 **IPv4 + IPv6**
 - **零依赖**：只用 Python 标准库，不需要 pip install，不需要 Node.js
-- **快**：单次查询 0.03～0.18 ms（纯内存二分），单核实测 **2500+ QPS**
-- **省**：常驻内存约 **26 MB**
-- 自带 API Key 鉴权、按 IP 限流、数据库热更新
+- **数据新**：跟随官方 ip2region xdb 更新（上游用各厂商公布的 geofeed 定期重建）
+- **快**：单次查询约 **0.4～0.5 ms**（含 HTTP 开销），单核实测 **1500+ QPS**
+- **省**：默认缓存策略下常驻内存约 **17 MB**
+- 自带 API Key 鉴权、按 IP 限流、数据文件热更新
 - 附一个单文件网页查询界面，可选的
 
 ---
@@ -18,18 +19,20 @@
 ipapi/
 ├── app/
 │   ├── server.py           # HTTP 服务
-│   └── ipdb.py             # 数据库解析核心
-├── data/                   # 数据库放这里（不入仓库，见第九节）
-│   ├── ip2region.db        # IPv4（约 8.3 MB）
-│   └── ipv6wry.db          # IPv6（约 2.5 MB）
+│   ├── ipdb.py             # 查询封装（结构化输出 / 缓存策略 / 线程安全）
+│   └── ip2region/          # 官方 xdb 查询绑定（Apache-2.0，内嵌，见 ip2region/SOURCE.md）
+├── data/                   # 数据文件放这里（不入仓库，见第九节）
+│   ├── ip2region_v4.xdb    # IPv4（约 10.6 MiB）
+│   └── ip2region_v6.xdb    # IPv6（约 35.6 MiB）
 ├── scripts/
 │   ├── deploy.sh           # 一键部署（装 systemd 服务）
 │   ├── ctl.sh              # 启动/停止/状态（不用 systemd 时）
-│   └── update_db.sh        # 下载 / 更新数据库
+│   └── update_db.sh        # 下载 / 更新数据文件
 ├── deploy/
 │   ├── ipapi.service       # systemd 单元模板
 │   ├── nginx.conf.example  # Nginx 反向代理配置示例
-│   └── index.html          # 可选：网页查询界面（挂法见 deploy/nginx.conf.example）
+│   ├── index.html          # 可选：网页查询界面（挂法见 deploy/nginx.conf.example）
+│   └── favicon.ico         # 网页界面用的图标（也内嵌在 index.html 里）
 ├── Dockerfile
 ├── README.md
 └── USAGE.md                # 调用示例（JS / Python / PHP / 命令行）
@@ -39,18 +42,20 @@ ipapi/
 
 ## 二、快速开始
 
-### 1. 准备数据库
+### 1. 准备数据文件
 
-**数据文件不随仓库分发**（授权原因，见第九节），先把它拉下来：
+**数据文件不随仓库分发**（体积与授权原因，见第九节），先把它拉下来：
 
 ```bash
 bash scripts/update_db.sh
 ```
 
-成功后会看到 `data/` 下出现两个 `.db` 文件。如果网络不通，可以换镜像：
+成功后会看到 `data/` 下出现两个 `.xdb` 文件（v4 约 10.6 MiB、v6 约 35.6 MiB）。
+如果网络不通，可以换镜像；只想先跑起来也可以只取 IPv4：
 
 ```bash
-IPAPI_NPM_MIRROR=https://registry.npmjs.org bash scripts/update_db.sh
+IPAPI_DB_BASE=https://你的镜像/data bash scripts/update_db.sh
+bash scripts/update_db.sh v4        # 只要 IPv4
 ```
 
 ### 2. 跑起来
@@ -214,15 +219,27 @@ location = /index.html {
 curl 'http://127.0.0.1:8080/ip?ip=223.5.5.5'
 ```
 
+```json
+{
+  "country": "中国", "region": "", "province": "浙江省", "city": "杭州市",
+  "isp": "阿里", "iso": "CN", "raw": "中国|浙江省|杭州市|阿里|CN",
+  "ip": "223.5.5.5", "version": 4
+}
+```
+
 | 字段 | 说明 |
 |---|---|
 | `country` | 国家 / 地区 |
-| `region` | 区域（多数库为空） |
+| `region` | 区域。**v3 格式没有这个字段，恒为空字符串**，保留仅为兼容旧调用方 |
 | `province` | 省份 |
 | `city` | 城市 |
 | `isp` | 运营商 |
+| `iso` | ISO 3166-1 alpha-2 国码（如 `CN` / `JP`），取不到时为空 |
 | `version` | `4` 或 `6` |
-| `raw` | 数据库原始字符串 |
+| `raw` | 数据文件里的原始字符串（`国家\|省份\|城市\|ISP\|iso`） |
+
+取不到的字段一律返回空字符串（不是 `null`）。
+国内数据是中文，海外数据是英文，这是上游数据的约定。
 
 ### `GET /me`
 
@@ -239,10 +256,22 @@ curl 'http://127.0.0.1:8080/ip?ip=223.5.5.5'
 
 ### `GET /health`
 
-健康检查，返回数据库加载状态。
+健康检查。返回**当前用的数据是哪一版**（`built_at` 是从 xdb 文件头读出的构建时间戳，秒），
+以及生效的缓存策略。
 
 ```json
-{ "status": "ok", "version": "1.1.0", "ipv4": true, "ipv6": true, "mtime": 1789520300 }
+{
+  "status": "ok",
+  "version": "1.3.0",
+  "ipv4": true,
+  "ipv6": true,
+  "cache": "vector",
+  "data": {
+    "ipv4": { "file": "ip2region_v4.xdb", "built_at": 1787892181, "cache": "vector" },
+    "ipv6": { "file": "ip2region_v6.xdb", "built_at": 1786685921, "cache": "vector" }
+  },
+  "mtime": 1789520300
+}
 ```
 
 ### `GET /`（或 `/help`）
@@ -282,6 +311,12 @@ curl 'http://127.0.0.1:8080/ip?ip=8.8.8.8&key=你的KEY'
 | `IPAPI_RATE_LIMIT` | `60` | 每 IP 每分钟请求上限，`0` 关闭 |
 | `IPAPI_TRUST_PROXY` | `1` | 是否信任 `X-Real-IP` / `X-Forwarded-For`，见下表 |
 | `IPAPI_RELOAD_CHECK` | `60` | 热重载检查间隔（秒），`<=0` 关闭 |
+| `IPAPI_NAME` | `IP 归属地查询 API` | `GET /` 与 `/help` 响应里 `service` 字段的名字，可填自己的品牌名。留空回退默认值 |
+| `IPAPI_CACHE` | `vector` | 数据缓存策略：`vector` / `buffer` / `file`，见 `data/README.md` 的内存对照表 |
+
+> `IPAPI_CACHE` 的取舍：`buffer` 把整个数据文件读进内存（约 63 MiB 常驻），
+> 单线程快约 1.4 倍；`vector`（默认）只常驻 512 KiB 索引，其余交给内核 page cache，
+> 内存紧张时还能回收。**1 GB 以内的机器建议保持默认。** 实测数字见第六节。
 
 `IPAPI_TRUST_PROXY` 有三档，别用错（用错会导致限流可被绕过）：
 
@@ -306,39 +341,59 @@ python3 app/server.py --version
 
 ## 六、性能与资源
 
-在 **1 核 / 512 MB 内存**的 Linux 容器（Debian 11，Python 3.9）上实测：
+在 **1 核 / 512 MB** 的 Linux 容器（Debian 11，Python 3.9.2）上，用 2026-08 版数据、
+拿 v4/v6 混合地址循环查询实测（连接复用）：
 
-| 指标 | 实测值 |
-|---|---|
-| 常驻内存 | 约 **26 MB** |
-| 并发吞吐（20 线程，连接复用） | **2534 QPS**，0 错误 |
-| 单次查询 | **0.03 ～ 0.18 ms** |
-| 数据库加载 | **47 ms**（IPv4 + IPv6 一起读入） |
+| `IPAPI_CACHE` | 常驻内存 | 单线程 keep-alive | 20 线程 × 6000 请求 |
+|---|---|---|---|
+| `vector`（默认） | **约 17 MB** | **约 0.5 ms/次** | 1500 ～ 2200 QPS，0 错误 |
+| `buffer` | 约 63 MB | 约 0.38 ms/次 | 1500 ～ 2700 QPS，0 错误 |
+| `file` | 约 16 MB | 约 0.5 ms/次（波动较大） | 1400 ～ 2000 QPS，0 错误 |
 
-**注意**：单进程即可，**不要**用多 worker 启动——每个 worker 都会各自加载一份完整数据库，内存翻倍。
+几点说明，免得被表里的数字误导：
+
+- **并发数字在这台 1 核机器上波动很大** —— 同一配置连跑两次能差 40%（核少、还有邻居干扰）。
+  所以别拿它当基准线，**看单线程延迟和内存更有意义**。
+- `buffer` 把 v4+v6 共 46 MiB 的数据整个读进进程堆，换来约 1.4 倍的单线程提速，
+  **代价是常驻内存接近 4 倍**。
+- `vector`（默认）只常驻 512 KiB 向量索引，其余按需读文件 ——
+  这些文件由内核 page cache 缓存，**内存吃紧时这部分可以回收**，这是它比 `buffer` 稳的地方。
+- 单进程即可，**不要**用多 worker 启动：每个 worker 都会各加载一份。
+
+> 这些是**查询接口**的端到端数字（含 HTTP 解析、限流、JSON 序列化）。
+> 引擎本身的查询只要几十微秒 —— 上面这个 0.5 ms 里绝大部分是 HTTP 和 Python 的开销。
 
 ---
 
-## 七、更新数据库
+## 七、更新数据
 
 ```bash
-bash scripts/update_db.sh
+bash scripts/update_db.sh          # 两个都更新
+bash scripts/update_db.sh v4       # 只更新 IPv4
 ```
 
-会从镜像拉取最新的 `ip2region` 包并原子替换数据文件，**服务会自动热重载，无需重启**。
+会从官方仓库拉取最新的 xdb 并原子替换，**服务会自动热重载，无需重启**。
+脚本会先校验文件体积、xdb 结构版本和 IP 版本，任何一个不对就换下一个镜像、不覆盖现有文件。
 
-挂个定时任务：
+上游的数据是**持续重建**的（数据源包含各厂商发布的 geofeed 与社区反馈），
+大致按月发布。挂个定时任务：
 
 ```cron
 # 每月 1 号凌晨 3 点更新
 0 3 1 * * cd /opt/ipapi && bash scripts/update_db.sh >> /tmp/ipapi-update.log 2>&1
 ```
 
+更完可以用 `/health` 确认数据版本换了：
+
+```bash
+curl -s http://127.0.0.1:8080/health | python3 -m json.tool
+```
+
 ---
 
 ## 八、常见问题
 
-**Q：启动报「未找到任何数据库文件」？**
+**Q：启动报「未找到任何数据文件」？**
 `data/` 是空的。先跑 `bash scripts/update_db.sh`。
 
 **Q：外网访问返回 502？**
@@ -351,11 +406,21 @@ bash scripts/update_db.sh
 你的 Web 服务器（或主机商）配了 `error_page 404 /404.html`，把接口的 404 换掉了。
 在反代的 `location` 里加一行 `proxy_intercept_errors off;`。
 
-**Q：查询结果不准，或者内网 IP 没识别出来？**
-运营商 IP 段变动频繁，跑一次 `update_db.sh`。数据库精度是城市级，仅供参考。
+**Q：查询结果不准？**
+先看 `GET /health` 里的 `data.*.built_at`，确认数据是不是太旧了 —— 离线库的价值全在数据新鲜度上。
+如果数据是几个月前的，跑一次 `update_db.sh`。
+
+另外两点与数据新旧无关、属于离线库的固有边界：
+
+- 精度是**城市级**，不能当精确定位用；
+- 机房 / 代理 / VPN 的 IP，其「注册地」和「用户实际所在地」本来就可能不一致
+  （例如某云厂在日本买的段，注册信息却在美国）。这类地址任何库都可能给出
+  看起来「不对」的答案，商用在线 API 也不例外，只是它们更新更勤。
 
 **Q：内存不够？**
-只保留 `ip2region.db`（IPv4）、删掉 IPv6 库可省约 2.5 MB；或调小 systemd 里的 `MemoryMax`。
+调 `IPAPI_CACHE=file`（常驻内存接近 0，代价是每次查询都读文件）；
+或者只保留 IPv4 数据（删掉 `ip2region_v6.xdb`，省约 35 MiB 磁盘）；
+也可以调小 systemd 里的 `MemoryMax`。
 
 **Q：想确认线上跑的是哪个版本？**
 ```bash
@@ -369,21 +434,28 @@ curl -s https://你的域名/ | head -c 200
 
 | 文件 | 来源 | 许可 |
 |---|---|---|
-| `data/ip2region.db` | [ip2region](https://github.com/lionsoul2014/ip2region) 的 IPv4 段索引数据 | MIT |
-| `data/ipv6wry.db` | 纯真 IPv6 地址库（随 `ip2region` npm 包分发） | 见下方说明 |
+| `data/ip2region_v4.xdb` | [ip2region](https://github.com/lionsoul2014/ip2region) 官方发布的 IPv4 xdb | Apache-2.0（以该仓库说明为准） |
+| `data/ip2region_v6.xdb` | 同上，IPv6 xdb | 同上 |
+| `app/ip2region/*.py` | 同仓库的官方 Python 绑定（内嵌，见 `app/ip2region/SOURCE.md`） | Apache-2.0，文件内保留原始版权头 |
 
-**这两个数据文件不随本仓库分发**，原因是 `ipv6wry.db` 的授权条款对再分发和商业使用有限制，
-直接打包进仓库会有合规风险。请通过 `scripts/update_db.sh` 自行获取，
-并自行确认你的使用场景符合其授权。
+**数据文件不随本仓库分发**（体积 46 MiB，且授权以数据提供方为准）。
+请通过 `scripts/update_db.sh` 自行获取，并自行确认你的使用场景符合其授权。
 
 **本项目自身的代码**以 MIT 许可发布，见 [LICENSE](LICENSE)。
+内嵌的 `app/ip2region/` 三个文件是第三方代码，沿用其 Apache-2.0 许可，未做修改
+（仅去掉了文件开头的 UTF-8 BOM）。
+
+> 关于数据源：本项目 1.2.0 及更早用的是 ip2region 的 v1 格式数据
+> （`ip2region.db` + 纯真 `ipv6wry.db`）。**那个渠道的数据自 2022 年起就没再更新了**
+> —— 它来自一个 npm 包（`ip2region@2.3.0`，最后发布于 2022-05-25），
+> 而上游项目本身一直活跃（官方 xdb 定期重建）。1.3.0 换到官方 xdb 就是为了跟上数据更新。
 
 ---
 
 ## 十、实现说明
 
-- IPv4 用的是 ip2region xdb 的**段索引**格式（每块 12 字节，`dataPtr` 高 8 位存长度）；
-- IPv6 用的是 IPDB 的**变长偏移表**格式，并处理了 IPv4-mapped、6to4、Teredo 这几种内嵌 v4 的情况。
-
-两种格式的解析都在 `app/ipdb.py` 里，关键位置有注释。
-解析实现参考了 ip2region 的 C / Java 版本。
+- 查询引擎用官方 Python 绑定（`app/ip2region/`），支持 v4 / v6 同一个 xdb 格式；
+- `app/ipdb.py` 负责：把官方返回的 `国家|省份|城市|ISP|iso` 拆成字典、
+  统一 v4/v6 入口（含 IPv4-mapped 的处理）、三种缓存策略与多线程安全；
+- 官方 `Searcher` 在 `file` / `vector` 模式下**共用一个文件句柄**，并发会读到错段，
+  所以本模块在这两种模式下给 `search()` 加了锁（`buffer` 模式是纯内存、无需加锁）。

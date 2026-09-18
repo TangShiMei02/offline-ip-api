@@ -1,4 +1,6 @@
-# 数据库文件（授权原因不入仓库，用 scripts/update_db.sh 获取）
+# 数据文件（体积与授权原因不入仓库，用 scripts/update_db.sh 获取）
+data/*.xdb
+data/*.xdb.new
 data/*.db
 data/*.db.new
 

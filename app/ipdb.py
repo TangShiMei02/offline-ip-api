@@ -1,252 +1,240 @@
 """
-纯 Python 实现的 IP 归属地离线查询（纯真 IP 库格式）
-- 支持 IPv4：ip2region.db（xdb 格式，来自 ip2region 项目）
-- 支持 IPv6：ipv6wry.db（IPDB 格式，来自 ip2region npm 包 / 纯真 IPv6 库）
+IP 归属地离线查询（官方 ip2region xdb v3 格式，IPv4 + IPv6 双栈）
+=================================================================
 
-零第三方依赖，仅用标准库。启动时全部读入内存。
+数据文件：
+- IPv4：``data/ip2region_v4.xdb``
+- IPv6：``data/ip2region_v6.xdb``
+
+查询引擎用的是官方随仓库发布的 Python 绑定（同目录 ``ip2region/``，Apache-2.0，
+来源与改动见 ``ip2region/SOURCE.md``）。本文件只做四件事：
+
+1. 把官方返回的 ``国家|省份|城市|ISP|iso`` 串拆成结构化字典；
+2. 统一 v4 / v6 入口，并处理 IPv4-mapped-IPv6 这类边界；
+3. 提供三种缓存策略（``IPAPI_CACHE``），并保证多线程安全；
+4. 暴露数据文件的构建时间，方便 ``/health`` 回答「我在用哪一版数据」。
+
+零第三方依赖，只用标准库。
+
+关于线程安全
+------------
+官方 ``Searcher`` 在 ``file`` / ``vector_index`` 模式下**共用一个文件句柄**
+（``seek`` 之后再 ``read``），多线程并发会互相踩指针、读到错段。
+本模块按缓存策略分别处理：
+
+- ``buffer``：整个文件在内存里，搜索过程不碰文件，天然无共享可变状态，不加锁；
+- ``vector`` / ``file``：每次查询走文件，用一把 ``Lock`` 把 ``search()`` 串起来。
+
+一次 ``search()`` 在预热后的耗时是微秒级（数据在 page cache 里），
+所以在「单核 + 反代」这台机器上加锁不是瓶颈（实测见 README 的性能章节）。
 """
 import ipaddress
-import struct
+import os
 import threading
 
+from ip2region import searcher as _searcher
+from ip2region import util as _util
 
-class Ipv4DB:
-    """ip2region xdb (IPv4) 解析"""
+# 缓存策略：
+#   vector（默认）—— 512KB 向量索引常驻内存，其余按需读文件
+#   buffer         —— 整个 xdb 读进内存，最快，占用最大
+#   file           —— 什么都不常驻，最省内存，每次查询都要读文件
+CACHE_MODES = ("vector", "buffer", "file")
 
-    INDEX_BLOCK_LEN = 12
+_CACHE_ALIASES = {
+    "": "vector", "vector": "vector", "index": "vector",
+    "vectorindex": "vector", "vector_index": "vector",
+    "buffer": "buffer", "memory": "buffer", "content": "buffer",
+    "file": "file", "fileonly": "file", "file_only": "file", "none": "file",
+}
 
-    def __init__(self, path):
-        with open(path, "rb") as f:
-            self.data = f.read()
-        self.first_index_ptr = struct.unpack_from("<I", self.data, 0)[0]
-        self.last_index_ptr = struct.unpack_from("<I", self.data, 4)[0]
-        self.total_blocks = (self.last_index_ptr - self.first_index_ptr) // self.INDEX_BLOCK_LEN + 1
-        if self.total_blocks <= 0:
-            raise ValueError("invalid xdb file")
 
-    @staticmethod
-    def ip_to_long(ip):
-        return struct.unpack(">I", ipaddress.IPv4Address(ip).packed)[0]
+def normalize_cache(mode):
+    """把 ``IPAPI_CACHE`` 的取值归一化成 vector / buffer / file。
 
-    def _search_long(self, ip_long):
-        low, high = 0, self.total_blocks
-        while low <= high:
-            mid = (low + high) >> 1
-            pos = self.first_index_ptr + mid * self.INDEX_BLOCK_LEN
-            sip = struct.unpack_from("<I", self.data, pos)[0]
-            if ip_long < sip:
-                high = mid - 1
-            else:
-                eip = struct.unpack_from("<I", self.data, pos + 4)[0]
-                if ip_long > eip:
-                    low = mid + 1
-                else:
-                    data_pos = struct.unpack_from("<I", self.data, pos + 8)[0]
-                    if data_pos == 0:
-                        return None
-                    data_len = (data_pos >> 24) & 0xFF
-                    data_pos &= 0x00FFFFFF
-                    region = self.data[data_pos + 4: data_pos + data_len].decode("utf-8", "ignore")
-                    return region.split("|")
+    无法识别时返回 ``None``（由调用方决定是报警还是回退）。
+    """
+    if mode is None:
         return None
+    return _CACHE_ALIASES.get(str(mode).strip().lower())
+
+
+def parse_region(raw):
+    """把官方原始串拆成字典。
+
+    v3 格式为 ``国家|省份|城市|ISP|iso-alpha2-code``，例如
+    ``中国|浙江省|杭州市|阿里|CN``、``Japan|Tokyo|Tokyo|Amazon|JP``。
+    ``0`` 表示该字段没有数据。
+
+    ``region`` 键是为兼容旧调用方而保留的（v3 起没有独立的「区域」字段），
+    恒为空字符串；``iso`` 是 v3 新增的 ISO 3166-1 alpha-2 国码。
+    """
+    parts = raw.split("|")
+
+    def g(i):
+        if i >= len(parts):
+            return ""
+        v = parts[i].strip()
+        return "" if v in ("0", "0.0", "-") else v
+
+    return {
+        "country": g(0),
+        "region": "",
+        "province": g(1),
+        "city": g(2),
+        "isp": g(3),
+        "iso": g(4),
+        "raw": raw,
+    }
+
+
+class XdbDB:
+    """单个 xdb 文件（v4 或 v6）的查询封装。"""
+
+    def __init__(self, path, expect=None, cache="vector"):
+        self.path = path
+        self.cache = normalize_cache(cache) or "vector"
+
+        if not os.path.exists(path):
+            raise FileNotFoundError("数据文件不存在: %s" % path)
+
+        # 先确认结构版本兼容（xdb 结构将来若升级，这里会明确报错而不是查出错结果）
+        with open(path, "rb") as h:
+            _util.verify(h)
+        header = _util.load_header_from_file(path)
+        ver = _util.version_from_header(header)
+        if ver is None:
+            raise ValueError("无法识别的 xdb ipVersion=%r: %s" % (header.ipVersion, path))
+        if expect is not None and ver.id != expect.id:
+            raise ValueError("数据文件是 %s，但期望 %s: %s" % (ver.name, expect.name, path))
+
+        self.version = ver
+        self.created_at = header.createdAt
+
+        if self.cache == "buffer":
+            buf = _util.load_content_from_file(path)
+            self._s = _searcher.new_with_buffer(ver, buf)
+            self._lock = None          # 纯内存，无需加锁
+        elif self.cache == "file":
+            self._s = _searcher.new_with_file_only(ver, path)
+            self._lock = threading.Lock()
+        else:
+            v_index = _util.load_vector_index_from_file(path)
+            self._s = _searcher.new_with_vector_index(ver, path, v_index)
+            self._lock = threading.Lock()
+
+    def raw(self, ip):
+        """返回官方原始串；查不到或地址不合法时返回空串。"""
+        try:
+            if self._lock is None:
+                return self._s.search(ip)
+            with self._lock:
+                return self._s.search(ip)
+        except Exception:
+            return ""
 
     def search(self, ip):
+        s = self.raw(ip)
+        return parse_region(s) if s else None
+
+    def close(self):
         try:
-            ip_long = self.ip_to_long(ip)
+            self._s.close()
         except Exception:
-            return None
-        parts = self._search_long(ip_long)
-        if not parts:
-            return None
-        # 国家|区域|省份|城市|ISP
-        def g(i):
-            return parts[i] if i < len(parts) and parts[i] != "0" else ""
-        return {
-            "country": g(0), "region": g(1), "province": g(2),
-            "city": g(3), "isp": g(4),
-            "raw": "|".join(parts),
-        }
-
-
-class Ipv6DB:
-    """纯真 IPv6 库 (IPDB) 解析"""
-
-    def __init__(self, path, ipv4=None):
-        with open(path, "rb") as f:
-            self.data = f.read()
-        if self.data[0:4] != b"IPDB":
-            raise ValueError("not an IPDB file")
-        self.offlen = struct.unpack_from("<b", self.data, 6)[0]
-        self.record = struct.unpack_from("<q", self.data, 8)[0]
-        self.index_start = struct.unpack_from("<q", self.data, 16)[0]
-        self.ipv4 = ipv4
-
-    def _read_long(self, offset):
-        b = self.data[offset:offset + self.offlen]
-        return int.from_bytes(b, "little", signed=False)
-
-    def _get_string(self, offset):
-        end = self.data.find(b"\x00", offset)
-        if end < 0:
-            end = len(self.data)
-        return self.data[offset:end].decode("utf-8", "ignore")
-
-    def _get_area_addr(self, offset):
-        byte = struct.unpack_from("<b", self.data, offset)[0]
-        if byte in (1, 2):
-            p = self._read_long(offset + 1)
-            return self._get_area_addr(p)
-        return self._get_string(offset)
-
-    def _get_addr(self, offset):
-        o = offset
-        byte = struct.unpack_from("<b", self.data, o)[0]
-        if byte == 1:
-            return self._get_addr(self._read_long(o + 1))
-        c_area = self._get_area_addr(o)
-        if byte == 2:
-            o += 1 + self.offlen
-        else:
-            o = self.data.find(b"\x00", o) + 1
-        a_area = self._get_area_addr(o)
-        return {"cArea": c_area.replace(" ", ""), "aArea": a_area}
-
-    def _find(self, ip, l, r):
-        while r - l > 1:
-            m = (l + r) >> 1
-            o = self.index_start + m * (8 + self.offlen)
-            new_ip = struct.unpack_from("<Q", self.data, o)[0]
-            if ip < new_ip:
-                r = m
-            else:
-                l = m
-        return l
-
-    def _search_long(self, ip6):
-        if ip6 == 1:
-            return {"cArea": "IANA保留地址", "aArea": "本机地址"}
-        ip = (ip6 >> 64) & 0xFFFFFFFFFFFFFFFF
-        if ip == 0:
-            realip = ip6 & 0xFFFFFFFF
-            return self._search_ipv4(realip)
-        if ((ip >> 48) & 0xFFFF) == 0x2002:
-            realip = (ip & 0x0000FFFFFFFF0000) >> 16
-            return self._search_ipv4(realip)
-        if ((ip >> 32) & 0xFFFFFFFF) == 0x20010000:
-            realip = (~ip6) & 0xFFFFFFFF
-            return self._search_ipv4(realip)
-        if ((ip6 >> 32) & 0xFFFF) == 0x5EFE:
-            realip = ip6 & 0xFFFFFFFF
-            return self._search_ipv4(realip)
-        idx = self._find(ip, 0, self.record)
-        ip_off = self.index_start + idx * (8 + self.offlen)
-        ip_rec_off = self._read_long(ip_off + 8)
-        return self._get_addr(ip_rec_off)
-
-    def _search_ipv4(self, realip):
-        if not self.ipv4:
-            return {"cArea": "未知", "aArea": "未知"}
-        parts = self.ipv4._search_long(int(realip))
-        if not parts:
-            return {"cArea": "未知", "aArea": "未知"}
-        return {"cArea": "|".join(parts), "aArea": parts[4] if len(parts) > 4 else ""}
-
-    def search(self, ip):
-        try:
-            if "/" in ip:
-                ip = ip.split("/")[0]
-            num = int(ipaddress.IPv6Address(ip))
-        except Exception:
-            return None
-        ret = self._search_long(num)
-        if not ret:
-            return None
-        if "city" in ret or ("country" in ret):
-            return ret
-        c_area = ret.get("cArea", "")
-        # 从 cArea 提取 国家/省/市
-        country = province = city = ""
-        first = c_area.find("国")
-        if first == 1:
-            first += 1
-            country = c_area[:first]
-        else:
-            first = 0
-        second = c_area.find("省")
-        if second >= 0:
-            second += 1
-            province = c_area[first:second]
-        else:
-            for p in ("内蒙古", "广西", "西藏", "宁夏", "新疆"):
-                i = c_area.find(p)
-                if i >= 0:
-                    second = i + len(p)
-                    province = c_area[first:second]
-                    break
-            else:
-                second = first
-        city1 = c_area.find("市")
-        city2 = c_area.find("州")
-        if city1 >= 0 and second < city1:
-            city = c_area[second:city1 + 1]
-        elif city2 >= 0 and second < city2:
-            city = c_area[second:city2 + 1]
-        return {
-            "country": country, "province": province.strip(),
-            "city": city.strip(), "isp": ret.get("aArea", ""),
-            "raw": f"{c_area}|{ret.get('aArea','')}",
-        }
+            pass
 
 
 class IPDB:
-    """统一查询入口，自动区分 v4/v6"""
+    """统一查询入口：自动区分 v4 / v6，统一返回结构化字典。"""
 
-    def __init__(self, v4_path=None, v6_path=None):
-        self.v4 = None
-        self.v6 = None
+    def __init__(self, v4_path=None, v6_path=None, cache=None):
         self.v4_path = v4_path
         self.v6_path = v6_path
+
+        wanted = normalize_cache(cache if cache is not None
+                                 else os.environ.get("IPAPI_CACHE"))
+        self.cache = wanted or "vector"
+        self.cache_fallback = (wanted is None
+                               and (cache is not None or os.environ.get("IPAPI_CACHE")))
+
+        self.v4 = None
+        self.v6 = None
+        self.problems = []
         self._lock = threading.Lock()
+
         if v4_path:
-            self.v4 = Ipv4DB(v4_path)
+            try:
+                self.v4 = XdbDB(v4_path, _util.IPv4, self.cache)
+            except Exception as e:
+                self.problems.append("IPv4: %s" % e)
         if v6_path:
-            self.v6 = Ipv6DB(v6_path, ipv4=self.v4)
+            try:
+                self.v6 = XdbDB(v6_path, _util.IPv6, self.cache)
+            except Exception as e:
+                self.problems.append("IPv6: %s" % e)
+
         if not self.v4 and not self.v6:
-            raise ValueError("at least one database required")
+            raise ValueError(
+                "没有任何可用数据文件，请先运行: bash scripts/update_db.sh"
+                + ("\n  " + "\n  ".join(self.problems) if self.problems else "")
+            )
+
+    # ---------- 查询 ----------
 
     def lookup(self, ip):
-        ip = ip.strip()
+        """查一个 IP。返回字典（含 ip / version），查不到返回 ``None``。"""
+        ip = (ip or "").strip()
+        if "/" in ip:                       # 容忍 1.2.3.0/24 这种写法，取网络号
+            ip = ip.split("/")[0]
+        if not ip:
+            return None
         try:
             obj = ipaddress.ip_address(ip)
         except ValueError:
             return None
+
+        # IPv4-mapped 的 IPv6（::ffff:8.8.8.8）语义上就是 IPv4，交给 v4 库查，
+        # 但 version 照实报 6 —— 它与 ::ffff:0:0/96 之外的 v6 地址不是一回事。
+        return self._lookup(ip, obj)
+
+    def _lookup(self, ip, obj):
         if obj.version == 4:
-            if not self.v4:
-                return None
-            r = self.v4.search(ip)
-            if r:
-                r["ip"] = ip
-                r["version"] = 4
-            return r
+            r = self.v4.search(ip) if self.v4 else None
         else:
-            if not self.v6:
+            mapped = obj.ipv4_mapped
+            if mapped is not None and self.v4:
+                r = self.v4.search(str(mapped))
+            else:
+                r = self.v6.search(ip) if self.v6 else None
+        if r:
+            r["ip"] = ip
+            r["version"] = obj.version
+        return r
+
+    # ---------- 维护 ----------
+
+    def info(self):
+        """给 /health 用：数据版本与缓存策略。"""
+        def one(db):
+            if not db:
                 return None
-            r = self.v6.search(ip)
-            if r:
-                r["ip"] = ip
-                r["version"] = 6
-            return r
+            return {"file": os.path.basename(db.path),
+                    "built_at": db.created_at,
+                    "cache": db.cache}
+        return {"cache": self.cache, "ipv4": one(self.v4), "ipv6": one(self.v6)}
 
     def reload(self):
-        """重新加载全部数据库（v4 + v6）。
+        """重新加载全部数据（v4 + v6）。
 
-        注意：调用方需要自己保证线程安全——重建期间旧实例仍在被其他线程读取，
-        所以不要在原地改 self.v4/self.v6，而是构建一个新 IPDB 再整体替换引用
-        （参考 app/server.py 的 maybe_reload()）。
+        注意：调用方需自己保证线程安全 —— 重建期间旧实例仍在被其他线程读取，
+        所以不要原地改 ``self.v4``/``self.v6``，而是构建一个新的 ``IPDB``
+        再整体替换引用（参考 ``app/server.py`` 的 ``maybe_reload``）。
+
+        这个方法保留是为了兼容旧调用方；实际推荐用新实例替换。
         """
         with self._lock:
             if not self.v4_path and not self.v6_path:
-                raise ValueError("no database path to reload from")
-            v4 = Ipv4DB(self.v4_path) if self.v4_path else None
-            v6 = Ipv6DB(self.v6_path, ipv4=v4) if self.v6_path else None
+                raise ValueError("没有可重载的数据文件路径")
+            v4 = XdbDB(self.v4_path, _util.IPv4, self.cache) if self.v4_path else None
+            v6 = XdbDB(self.v6_path, _util.IPv6, self.cache) if self.v6_path else None
             self.v4, self.v6 = v4, v6

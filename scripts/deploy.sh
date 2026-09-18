@@ -38,21 +38,19 @@ if [ -z "$PYTHON" ]; then
 fi
 echo "[+] Python: $("$PYTHON" -c 'import sys;print("%d.%d.%d"%sys.version_info[:3])')"
 
-# 2. 检查数据文件
-missing=0
-for f in data/ip2region.db data/ipv6wry.db; do
-    if [ ! -f "$BASE_DIR/$f" ]; then
-        echo "[!] 缺少数据文件 $f"
-        missing=1
-    fi
-done
-if [ "$missing" = "1" ]; then
-    echo "    请先运行： bash scripts/update_db.sh   （会从 npmmirror 拉取）"
-    echo "    注意：数据库文件因授权原因不入仓库，见 README「数据来源与许可」。"
+# 2. 检查数据文件（IPv4 必须有；IPv6 可选，缺了只是 v6 查不了）
+if [ ! -f "$BASE_DIR/data/ip2region_v4.xdb" ]; then
+    echo "[!] 缺少 IPv4 数据文件 data/ip2region_v4.xdb"
+    echo "    请先运行： bash scripts/update_db.sh"
+    echo "    注意：数据文件因体积与授权原因不入仓库，见 README「数据来源与许可」。"
     exit 1
 fi
+if [ ! -f "$BASE_DIR/data/ip2region_v6.xdb" ]; then
+    echo "[i] 没有 IPv6 数据文件 data/ip2region_v6.xdb —— IPv6 查询会返回「无效或未收录」"
+    echo "    需要的话： bash scripts/update_db.sh v6"
+fi
 echo "[+] 数据文件就绪"
-ls -lh "$BASE_DIR/data" | sed 's/^/    /'
+ls -lh "$BASE_DIR/data"/*.xdb | sed 's/^/    /'
 
 # 3. 给脚本加执行权限
 chmod +x "$BASE_DIR/scripts/"*.sh 2>/dev/null || true

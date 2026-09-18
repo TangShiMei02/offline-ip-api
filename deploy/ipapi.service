@@ -22,6 +22,10 @@ Environment="IPAPI_KEY=__IPAPI_KEY__"
 Environment="IPAPI_RATE_LIMIT=__RATE_LIMIT__"
 # 是否信任 X-Real-IP / X-Forwarded-For，在 Nginx 后面保持 1
 Environment="IPAPI_TRUST_PROXY=1"
+# 数据缓存策略：vector（默认，512KB 索引常驻 + 按需读文件，约 17MB）
+#               buffer（整库进进程堆，快约 1.4 倍，约 63MB）
+#               file  （最省内存，每次查询都读文件）
+Environment="IPAPI_CACHE=vector"
 
 # ===== 内存与资源限制（针对 512M 小机器）=====
 MemoryMax=200M

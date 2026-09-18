@@ -22,18 +22,28 @@ from urllib.parse import urlparse, parse_qs
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ipdb import IPDB  # noqa: E402
 
-VERSION = "1.1.0"
+VERSION = "1.3.0"
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
-V4_PATH = os.path.join(DATA_DIR, "ip2region.db")
-V6_PATH = os.path.join(DATA_DIR, "ipv6wry.db")
+# 官方 ip2region xdb（v3 格式）。用 scripts/update_db.sh 获取。
+V4_PATH = os.path.join(DATA_DIR, "ip2region_v4.xdb")
+V6_PATH = os.path.join(DATA_DIR, "ip2region_v6.xdb")
 
 # ---------- 配置（可用环境变量覆盖） ----------
 API_KEY = os.environ.get("IPAPI_KEY", "").strip()           # 空 = 不校验
 RATE_LIMIT = int(os.environ.get("IPAPI_RATE_LIMIT", "60"))  # 每分钟每IP请求数，0=关闭
 RELOAD_INTERVAL = int(os.environ.get("IPAPI_RELOAD_CHECK", "60"))  # 秒；<=0 关闭热重载检查
+
+# 数据缓存策略：vector（默认，512KB 索引常驻 + 按需读文件）
+#              buffer（整库进内存，最快，v4+v6 约 48MB）
+#              file  （最省内存，每次查询都读文件）
+CACHE_MODE = (os.environ.get("IPAPI_CACHE", "").strip() or "vector")
+
+# 服务名：只影响 GET / 和 /help 响应里那个 "service" 字段（以及首页标题）。
+# 自部署时想换成自己的名字就设这个变量；留空用默认值。
+SERVICE_NAME = os.environ.get("IPAPI_NAME", "").strip() or "IP 归属地查询 API"
 
 # IPAPI_TRUST_PROXY 三档：
 #   0 / false / off  不信任任何转发头（服务直接对外暴露时用）
@@ -62,6 +72,14 @@ def _max_mtime(paths):
     return max(stamps) if stamps else 0
 
 
+def _fmt_ts(ts):
+    """把 xdb 头里的构建时间戳（UTC 秒）格式化成可读字符串。"""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(int(ts)))
+    except Exception:
+        return str(ts)
+
+
 def get_db():
     """首次调用时加载数据库；之后直接返回缓存。"""
     global _db, _db_mtime
@@ -70,10 +88,18 @@ def get_db():
             if _db is None:                    # 锁内二次检查，避免并发重复加载
                 v4, v6 = _data_paths()
                 if not v4 and not v6:
-                    raise RuntimeError("未找到任何数据库文件，请放到 data/ 目录")
-                _db = IPDB(v4, v6)
+                    raise RuntimeError("未找到任何数据文件，请先运行: bash scripts/update_db.sh")
+                _db = IPDB(v4, v6, cache=CACHE_MODE)
                 _db_mtime = _max_mtime((v4, v6))
-                log.info("数据库加载完成 v4=%s v6=%s", bool(v4), bool(v6))
+                info = _db.info()
+                log.info("数据加载完成 cache=%s v4=%s v6=%s",
+                         _db.cache, bool(v4), bool(v6))
+                for bad in _db.problems:
+                    log.warning("数据文件有问题（该项已跳过）: %s", bad)
+                for k in ("ipv4", "ipv6"):
+                    if info.get(k):
+                        log.info("  %s: %s  构建于 %s", k, info[k]["file"],
+                                 _fmt_ts(info[k]["built_at"]))
     return _db
 
 
@@ -91,7 +117,7 @@ def maybe_reload():
         # 否则每个线程都会 new 一份完整数据库，小内存机器会瞬间吃紧。
         if cur <= _db_mtime + 1:
             return
-        _db = IPDB(v4, v6)
+        _db = IPDB(v4, v6, cache=CACHE_MODE)
         _db_mtime = cur
         log.info("检测到数据更新，已重载")
 
@@ -214,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/", "/help"):
             return self._send(200, {
-                "service": "IP 归属地查询 API",
+                "service": SERVICE_NAME,
                 "version": VERSION,
                 "endpoints": {
                     "GET /ip?ip=<地址>": "查询指定 IP（支持 v4/v6）",
@@ -222,16 +248,19 @@ class Handler(BaseHTTPRequestHandler):
                     "GET /batch?ips=a,b,c": "批量查询（最多 50 个）",
                     "GET /health": "健康检查",
                 },
-                "example": "/ip?ip=114.114.114.114",
+                "example": "/ip?ip=223.5.5.5",
             })
 
         if path == "/health":
             try:
                 db = get_db()
+                info = db.info()
                 return self._send(200, {
                     "status": "ok",
                     "version": VERSION,
                     "ipv4": bool(db.v4), "ipv6": bool(db.v6),
+                    "cache": info["cache"],
+                    "data": {"ipv4": info["ipv4"], "ipv6": info["ipv6"]},
                     "mtime": int(_db_mtime),
                 })
             except Exception as e:
@@ -326,8 +355,9 @@ def main():
         sys.exit(1)
 
     srv = Server((args.host, args.port), Handler)
-    log.info("ipapi %s 已启动: http://%s:%d  (key=%s, limit=%d/min)",
-             VERSION, args.host, args.port, "on" if API_KEY else "off", RATE_LIMIT)
+    log.info("%s v%s 已启动: http://%s:%d  (key=%s, limit=%d/min, cache=%s)",
+             SERVICE_NAME, VERSION, args.host, args.port,
+             "on" if API_KEY else "off", RATE_LIMIT, get_db().cache)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

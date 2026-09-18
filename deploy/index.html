@@ -2,151 +2,249 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- 若页面和接口不在同一个路径下，改这里填接口前缀，例如 "/api" 或 "https://ip.example.com" -->
 <meta name="api-base" content="">
-<title>IP 归属地查询</title>
+<!-- 花体站名是 Unicode 特殊字符，搜索引擎匹配不到原文，所以这里另给一份纯文本的 -->
+<meta name="description" content="TangShiMei 的 IP 归属地查询服务 —— 离线数据库，支持 IPv4 / IPv6，查询不落库。">
+<meta name="author" content="TangShiMei">
+<link rel="icon" type="image/x-icon" href="data:image/x-icon;base64,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">
+<title>𝓣𝓪𝓷𝓰𝓢𝓱𝓲𝓜𝓮𝓲 的 IP 归属地查询服务</title>
 <style>
+:root{
+  color-scheme: dark light;
+  --bg:#16171a; --fg:#e9e9ea; --dim:#86888e;
+  --line:#2b2c30; --line-soft:#232427;
+  --accent:#f77234; --err:#ff7b72;
+  --btn-bg:#e9e9ea; --btn-fg:#16171a;
+}
+@media (prefers-color-scheme: light){
   :root{
-    --bg:#0f1117; --card:#171a23; --line:#252936; --fg:#e8eaf0;
-    --muted:#8b93a7; --accent:#4f8cff; --ok:#3fb950; --err:#f85149;
+    --bg:#fbfbfa; --fg:#1b1c1e; --dim:#6d6f73;
+    --line:#e6e5e2; --line-soft:#eeece8;
+    --accent:#e85f1f; --err:#c0392b;
+    --btn-bg:#1b1c1e; --btn-fg:#fbfbfa;
   }
-  @media (prefers-color-scheme: light){
-    :root{--bg:#f5f6fa;--card:#fff;--line:#e3e6ee;--fg:#1a1d26;--muted:#6b7280;}
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);
-    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
-    display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
-  .wrap{width:100%;max-width:680px}
-  h1{font-size:22px;font-weight:600;margin:0 0 6px}
-  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
-  .row{display:flex;gap:10px}
-  input{flex:1;padding:11px 14px;border-radius:8px;border:1px solid var(--line);
-    background:transparent;color:var(--fg);font-size:15px;outline:none;font-family:ui-monospace,Menlo,monospace}
-  input:focus{border-color:var(--accent)}
-  button{padding:11px 20px;border-radius:8px;border:none;background:var(--accent);
-    color:#fff;font-size:15px;font-weight:500;cursor:pointer;white-space:nowrap}
-  button:hover{opacity:.9}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  .result{margin-top:18px;display:none}
-  table{width:100%;border-collapse:collapse;font-size:14px}
-  td{padding:9px 0;border-bottom:1px solid var(--line);vertical-align:top}
-  td:first-child{color:var(--muted);width:92px}
-  td:last-child{font-family:ui-monospace,Menlo,monospace;word-break:break-all}
-  .msg{margin-top:14px;padding:11px 14px;border-radius:8px;font-size:14px;display:none}
-  .msg.err{background:rgba(248,81,73,.12);color:var(--err);display:block}
-  .msg.ok{background:rgba(63,185,80,.12);color:var(--ok);display:block}
-  .hint{margin-top:16px;font-size:12px;color:var(--muted);line-height:1.8}
-  code{background:rgba(127,127,127,.15);padding:2px 5px;border-radius:4px;
-    font-family:ui-monospace,Menlo,monospace;font-size:12px}
-  .quick{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
-  .quick span{font-size:12px;color:var(--muted);cursor:pointer;border:1px solid var(--line);
-    padding:3px 10px;border-radius:20px}
-  .quick span:hover{border-color:var(--accent);color:var(--accent)}
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:76px 20px 52px; background:var(--bg); color:var(--fg);
+  font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+main{max-width:560px; margin:0 auto}
+.brand{margin:0; font-size:13px; color:var(--dim); letter-spacing:.02em}
+h1{margin:5px 0 30px; font-size:22px; font-weight:500; letter-spacing:.01em}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+.query{display:flex; gap:8px}
+input{
+  flex:1; min-width:0; padding:10px 12px; background:transparent; color:var(--fg);
+  border:1px solid var(--line); border-radius:4px; outline:none;
+  font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  transition:border-color 120ms linear;
+}
+input::placeholder{color:var(--dim); font-family:inherit}
+input:focus{border-color:var(--accent)}
+button{
+  padding:10px 18px; border:0; border-radius:4px; cursor:pointer;
+  background:var(--btn-bg); color:var(--btn-fg); font:14px/1.5 inherit;
+}
+button:disabled{opacity:.45; cursor:default}
+button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+.quick{display:flex; flex-wrap:wrap; gap:6px 20px; margin:14px 0 0}
+.quick button{
+  padding:0; border:0; border-bottom:1px solid transparent; border-radius:0;
+  background:none; color:var(--dim); font-size:13px;
+  transition:color 120ms linear, border-color 120ms linear;
+}
+.quick button:hover{color:var(--fg); border-bottom-color:var(--line)}
+.quick button.mine{color:var(--accent); border-bottom-color:var(--accent)}
+
+.msg{
+  display:none; margin:24px 0 0; padding:1px 0 1px 10px;
+  border-left:2px solid var(--err); color:var(--err); font-size:14px;
+}
+.msg.on{display:block}
+
+.result{display:none; margin:28px 0 0}
+.result.on{display:block; animation:appear 100ms linear}
+@keyframes appear{from{opacity:0} to{opacity:1}}
+.row{display:flex; gap:16px; padding:7px 0; border-bottom:1px solid var(--line-soft)}
+.row:last-child{border-bottom:0}
+.row dt{flex:0 0 60px; margin:0; color:var(--dim); font-size:13px}
+.row dd{flex:1; min-width:0; margin:0; word-break:break-all;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:14px}
+.row dd .iso{color:var(--dim)}
+
+footer{margin:36px 0 0; font-size:12px; color:var(--dim)}
+footer code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition:none !important; animation:none !important}
+}
 </style>
 </head>
 <body>
-<div class="wrap">
+<main>
+  <p class="brand">𝓣𝓪𝓷𝓰𝓢𝓱𝓲𝓜𝓮𝓲</p>
   <h1>IP 归属地查询</h1>
-  <div class="sub">离线数据库 · 支持 IPv4 / IPv6 · 查询不落库</div>
 
-  <div class="card">
-    <div class="row">
-      <input id="ip" placeholder="输入 IP，例如 114.114.114.114" autocomplete="off">
-      <button id="btn">查询</button>
-    </div>
-    <div class="quick">
-      <span data-ip="114.114.114.114">114.114.114.114</span>
-      <span data-ip="223.5.5.5">223.5.5.5</span>
-      <span data-ip="8.8.8.8">8.8.8.8</span>
-      <span data-ip="240e:4c:4008::1">240e:4c:4008::1</span>
-    </div>
+  <form class="query" id="form">
+    <input id="ip" type="text" autocomplete="off" spellcheck="false"
+           placeholder="输入 IPv4 或 IPv6 地址" aria-label="IP 地址">
+    <button id="btn" type="submit">查询</button>
+  </form>
 
-    <div class="msg" id="msg"></div>
+  <p class="quick">
+    <button type="button" id="chip-me" class="mine" hidden>我的 IP</button>
+    <button type="button" data-ip="8.8.8.8">8.8.8.8</button>
+    <button type="button" data-ip="223.5.5.5">223.5.5.5</button>
+    <button type="button" data-ip="240e:4c:4008::1">240e:4c:4008::1</button>
+  </p>
 
-    <div class="result" id="result">
-      <table>
-        <tr><td>IP</td><td id="r-ip"></td></tr>
-        <tr><td>国家</td><td id="r-country"></td></tr>
-        <tr><td>省份</td><td id="r-province"></td></tr>
-        <tr><td>城市</td><td id="r-city"></td></tr>
-        <tr><td>运营商</td><td id="r-isp"></td></tr>
-      </table>
-    </div>
+  <p class="msg" id="msg" role="status"></p>
 
-    <div class="hint">
-      API 调用：<code>GET /ip?ip=8.8.8.8</code><br>
-      也可直接访问 <a href="#" id="me">/me</a> 查看你自己的公网 IP
-    </div>
-  </div>
-</div>
+  <dl class="result" id="result">
+    <div class="row"><dt>IP</dt><dd id="r-ip"></dd></div>
+    <div class="row"><dt>国家</dt><dd id="r-country"></dd></div>
+    <div class="row"><dt>省份</dt><dd id="r-province"></dd></div>
+    <div class="row"><dt>城市</dt><dd id="r-city"></dd></div>
+    <div class="row"><dt>运营商</dt><dd id="r-isp"></dd></div>
+  </dl>
+
+  <footer>
+    <span id="dataver">离线数据库</span> · <code>GET /ip?ip=8.8.8.8</code>
+  </footer>
+</main>
 
 <script>
-const $ = id => document.getElementById(id);
+const $ = function (id) { return document.getElementById(id); };
 
 // 接口前缀：默认同源根路径（''），页面放在子目录或接口在别处时改 <meta name="api-base">
 const API = (document.querySelector('meta[name="api-base"]') || {}).content || '';
-$('me').href = API + '/me';
 
-function show(cls, text){
+function say(text, isError) {
   const m = $('msg');
-  m.className = 'msg ' + cls;
   m.textContent = text;
+  m.className = 'msg on';
+  m.style.borderLeftColor = isError ? 'var(--err)' : 'var(--accent)';
+  m.style.color = isError ? 'var(--err)' : 'var(--fg)';
 }
+function hush() { $('msg').className = 'msg'; $('msg').textContent = ''; }
 
-async function readJSON(r){
-  const ct = (r.headers.get('content-type') || '');
-  if (ct.indexOf('json') < 0) {
-    // 被反向代理/主机商的 error_page 换成了 HTML 页，拿不到结构化错误
-    return { __notjson: true, status: r.status };
-  }
-  try { return await r.json(); } catch (e) { return { __notjson: true, status: r.status }; }
-}
-
-async function query(){
-  const ip = $('ip').value.trim();
-  if (!ip) { show('err', '请输入 IP 地址'); return; }
-  $('btn').disabled = true;
-  $('result').style.display = 'none';
-  $('msg').className = 'msg';
+// 统一取 JSON。分辨「返回的不是 JSON」这种被反代/主机商换掉错误页的情况。
+async function getJSON(path, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(function () { ctl.abort(); }, ms || 5000);
   try {
-    const r = await fetch(`${API}/ip?ip=${encodeURIComponent(ip)}`);
-    const d = await readJSON(r);
-    if (d.__notjson) {
-      show('err', `请求失败（HTTP ${d.status}），返回的不是 JSON —— 检查反向代理是否把错误页替换成了 HTML`);
+    const r = await fetch(API + path, { signal: ctl.signal });
+    let data = null, isJSON = false;
+    if ((r.headers.get('content-type') || '').indexOf('json') >= 0) {
+      try { data = await r.json(); isJSON = true; } catch (e) { isJSON = false; }
+    }
+    return { status: r.status, data: data, json: isJSON };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function fill(el, value, suffix) {
+  el.textContent = (value && value !== '0') ? value : '—';
+  if (suffix) {
+    const s = document.createElement('span');
+    s.className = 'iso';
+    s.textContent = ' ' + suffix;
+    el.appendChild(s);
+  }
+}
+
+function showResult(d) {
+  fill($('r-ip'), d.ip);
+  fill($('r-country'), d.country, d.iso ? d.iso : '');
+  fill($('r-province'), d.province);
+  fill($('r-city'), d.city);
+  fill($('r-isp'), d.isp);
+  $('result').className = 'result on';
+}
+
+function hideResult() { $('result').className = 'result'; }
+
+async function query(ip) {
+  const q = (typeof ip === 'string' && ip ? ip : $('ip').value).trim();
+  if (!q) { hideResult(); say('请输入 IP 地址', true); return; }
+
+  $('btn').disabled = true;
+  hideResult();
+  hush();
+  try {
+    const r = await getJSON('/ip?ip=' + encodeURIComponent(q));
+    if (!r.json) {
+      say('请求失败（HTTP ' + r.status + '），返回的不是 JSON —— 多半是反向代理把错误页换成了 HTML', true);
       return;
     }
-    if (!r.ok) { show('err', d.msg || `查询失败（HTTP ${r.status}）`); return; }
-    $('r-ip').textContent = d.ip;
-    $('r-country').textContent = d.country || '—';
-    $('r-province').textContent = d.province || '—';
-    $('r-city').textContent = d.city || '—';
-    $('r-isp').textContent = d.isp || '—';
-    $('result').style.display = 'block';
+    if (r.status === 404) { say('这个 IP 无效，或者数据库里没有收录', true); return; }
+    if (r.status === 429) { say('查询太频繁了，等一分钟再试', true); return; }
+    if (r.status !== 200) { say((r.data && r.data.msg) || ('查询失败（HTTP ' + r.status + '）'), true); return; }
+    showResult(r.data);
   } catch (e) {
-    show('err', '请求失败，请检查服务是否正常运行');
+    say(e && e.name === 'AbortError' ? '请求超时了，检查一下网络' : '网络错误，没能连上接口', true);
   } finally {
     $('btn').disabled = false;
   }
 }
 
-$('btn').onclick = query;
-$('ip').addEventListener('keydown', e => { if (e.key === 'Enter') query(); });
-document.querySelectorAll('.quick span').forEach(el => {
-  el.onclick = () => { $('ip').value = el.dataset.ip; query(); };
+// 只把「公网地址」填进输入框：内网 / 保留地址填了没意义，反而让人以为服务坏了
+function isPublicIP(ip) {
+  if (typeof ip !== 'string' || !ip) return false;
+  const s = ip.toLowerCase().trim();
+  if (s === '::1' || s.indexOf('fe80:') === 0 || s.indexOf('fc') === 0 || s.indexOf('fd') === 0) return false;
+  const m = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = +m[1], b = +m[2];
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    return true;
+  }
+  if (s.indexOf(':') >= 0) return true;      // 其余 IPv6 一律当作公网
+  return false;
+}
+
+$('form').addEventListener('submit', function (e) { e.preventDefault(); query(); });
+
+document.querySelectorAll('.quick button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    const v = b.dataset.ip || '';
+    if (!v) return;
+    $('ip').value = v;
+    query(v);
+  });
 });
 
-// 自动识别：把「你的公网 IP」提示填进输入框的 placeholder
-(async () => {
+// 进页面先把自己的公网 IP 填好（只填值，不自动查），顺便把数据版本显示出来
+(async function () {
   try {
-    const r = await fetch(`${API}/me`);
-    const d = await readJSON(r);
-    if (d && d.ip && /^[0-9a-fA-F:.]+$/.test(d.ip) && d.ip !== '127.0.0.1') {
-      $('ip').placeholder = `你的公网 IP 是 ${d.ip}，点查询`;
+    const r = await getJSON('/me', 4000);
+    if (r.status === 200 && r.data && isPublicIP(r.data.ip)) {
+      $('ip').value = r.data.ip;
+      const chip = $('chip-me');
+      chip.dataset.ip = r.data.ip;
+      chip.hidden = false;
     }
-  } catch (e) {}
+  } catch (e) { /* 拿不到就算了，不影响手输 */ }
+
+  try {
+    const h = await getJSON('/health', 4000);
+    const v4 = h.data && h.data.data && h.data.data.ipv4;
+    if (v4 && v4.built_at) {
+      const t = new Date(v4.built_at * 1000);
+      const mm = ('0' + (t.getMonth() + 1)).slice(-2);
+      $('dataver').textContent = '离线库 ' + t.getFullYear() + '-' + mm;
+    }
+  } catch (e) { /* 同上 */ }
 })();
 </script>
 </body>

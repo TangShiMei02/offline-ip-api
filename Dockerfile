@@ -15,14 +15,15 @@ COPY data/    ./data/
 
 # 数据文件不随仓库分发（见 README「数据来源与许可」）。
 # 构建上下文里的 data/ 为空时，在构建阶段下载一份，这样镜像开箱即用。
-RUN if [ ! -f data/ip2region.db ] || [ ! -f data/ipv6wry.db ]; then \
-        echo ">>> data/ 为空，构建时下载数据库..."; \
+RUN if [ ! -f data/ip2region_v4.xdb ] || [ ! -f data/ip2region_v6.xdb ]; then \
+        echo ">>> data/ 为空，构建时下载数据文件..."; \
         bash scripts/update_db.sh; \
     fi
 
 ENV IPAPI_KEY="" \
     IPAPI_RATE_LIMIT=60 \
-    IPAPI_TRUST_PROXY=1
+    IPAPI_TRUST_PROXY=1 \
+    IPAPI_CACHE=vector
 
 EXPOSE 8080
 
